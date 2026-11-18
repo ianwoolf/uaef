@@ -10,6 +10,10 @@ from typing import Any, Dict, Optional, Union
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from uaef.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class AWSConfig(BaseModel):
     """AWS configuration for Bedrock LLM Judge."""
@@ -61,23 +65,65 @@ _VETTED_JUDGE_MODEL_PREFIXES: tuple = (
 )
 
 
+def get_allow_unvetted_judge_models() -> bool:
+    """Whether an unvetted judge model_id is currently allowed.
+
+    True when either the ``UAEF_ALLOW_UNVETTED_JUDGE_MODELS`` env var or the
+    global config's ``llm_judge.allow_unvetted_models`` flag is set. The env
+    var is read directly because the global config may itself be mid-load
+    when the ``model_id`` field validator runs.
+    """
+    if _allow_unvetted_judge_models_from_env():
+        return True
+    return bool(getattr(getattr(_config, "llm_judge", None), "allow_unvetted_models", False))
+
+
 def _validate_judge_model_id(v: str) -> str:
     """Reject a judge model_id outside the vetted Anthropic Claude family.
 
     Accepts both a bare model ID (``anthropic.claude-...``) and a
     cross-region inference-profile ID (``us.anthropic.claude-...``), since
     both are valid ``modelId`` values for ``bedrock-runtime.invoke_model``.
+
+    When ``llm_judge.allow_unvetted_models`` is true (opt-in), an unvetted
+    model ID is allowed through with a warning log instead of raising, so
+    custom judge backends (see ``uaef.llm_judge.backend``) can target other
+    model families at the operator's own risk.
     """
-    if not any(v.startswith(prefix) for prefix in _VETTED_JUDGE_MODEL_PREFIXES):
-        raise ValueError(
-            f"Unvetted judge model_id: {v!r}. UAEF's LLM-judge metrics hardcode "
-            "the Anthropic Claude Messages API request format, so only "
-            f"Anthropic Claude model IDs are supported (one of the prefixes "
-            f"{_VETTED_JUDGE_MODEL_PREFIXES}). A different model family would "
-            "already fail at the Bedrock API call with a malformed-request "
-            "error; this check surfaces that at config load instead."
+    if any(v.startswith(prefix) for prefix in _VETTED_JUDGE_MODEL_PREFIXES):
+        return v
+    if get_allow_unvetted_judge_models():
+        logger.warning(
+            "Unvetted judge model_id allowed by llm_judge.allow_unvetted_models: "
+            f"{v!r}. UAEF's built-in request formatting targets the Anthropic "
+            "Claude Messages API; ensure the configured judge backend "
+            "supports this model."
         )
-    return v
+        return v
+    raise ValueError(
+        f"Unvetted judge model_id: {v!r}. UAEF's LLM-judge metrics hardcode "
+        "the Anthropic Claude Messages API request format, so only "
+        f"Anthropic Claude model IDs are supported (one of the prefixes "
+        f"{_VETTED_JUDGE_MODEL_PREFIXES}). A different model family would "
+        "already fail at the Bedrock API call with a malformed-request "
+        "error; this check surfaces that at config load instead. Set "
+        "llm_judge.allow_unvetted_models=true to override with a warning."
+    )
+
+
+def _allow_unvetted_judge_models_from_env() -> bool:
+    """Read the opt-in override (default False) from the environment.
+
+    Read directly from the env var rather than the global config to avoid a
+    circular dependency (the validator below runs while LLMJudgeConfig is
+    being constructed, possibly as part of loading the global config).
+    """
+    return os.getenv("UAEF_ALLOW_UNVETTED_JUDGE_MODELS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 class LLMJudgeConfig(BaseModel):
@@ -107,6 +153,14 @@ class LLMJudgeConfig(BaseModel):
         default=1.0,
         description="Initial delay between retries in seconds",
         gt=0.0
+    )
+    allow_unvetted_models: bool = Field(
+        default=False,
+        description=(
+            "Allow a judge model_id outside the vetted Anthropic Claude "
+            "family (warns instead of raising). Intended for custom judge "
+            "backends; the built-in request formatting targets Claude."
+        )
     )
     
     @field_validator("temperature")
