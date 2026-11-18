@@ -7,6 +7,12 @@ This module provides LLM-based evaluation capabilities using AWS Bedrock,
 including prompt templates, calibration, and batch processing.
 """
 
+from uaef.llm_judge.backend import (
+    DefaultBedrockJudgeClient,
+    JudgeClient,
+    get_judge_client,
+    set_judge_client,
+)
 from uaef.llm_judge.bedrock_client import (
     BedrockClient,
     BedrockClientError,
