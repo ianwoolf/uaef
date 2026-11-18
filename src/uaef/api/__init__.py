@@ -59,6 +59,7 @@ from uaef.models.evaluation_result import EvaluationResult
 from uaef.models.ground_truth import GroundTruth
 from uaef.models.multi_agent_trace import MultiAgentTrace
 from uaef.metrics import get_full_metric_catalog
+from uaef.storage.base import StorageBackend
 from uaef.storage.dynamodb_s3 import DynamoS3Storage, get_storage
 
 logger = get_logger(__name__)
@@ -70,18 +71,30 @@ _regression_detector = RegressionDetector()
 _review_queue = ReviewQueue()
 _agreement_calculator = AgreementCalculator()
 
-# Lazy-initialized DynamoDB+S3 storage for persistence
-_store: Optional[DynamoS3Storage] = None
+# Lazy-initialized storage backend for persistence (DynamoDB+S3 by
+# default; inject an alternative via set_store())
+_store: Optional[StorageBackend] = None
 
 
-def _get_store() -> DynamoS3Storage:
-    """Get or initialize the DynamoDB+S3 storage instance."""
+def _get_store() -> StorageBackend:
+    """Get or initialize the storage backend instance."""
     global _store
     if _store is None:
         _store = get_storage()
         _store.create_table_if_not_exists()
         _store.create_bucket_if_not_exists()
     return _store
+
+
+def set_store(backend: StorageBackend) -> None:
+    """Inject a custom storage backend (the sole injection entry point).
+
+    Replaces the global store with ``backend``; subsequent persistence
+    calls in this module use it instead of the default DynamoDB+S3 store.
+    ``backend`` must implement ``uaef.storage.base.StorageBackend``.
+    """
+    global _store
+    _store = backend
 
 
 def _resolve_experiment(

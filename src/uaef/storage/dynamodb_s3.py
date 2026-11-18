@@ -19,6 +19,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from uaef.config import StorageConfig, get_config
+from uaef.storage.base import StorageBackend
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def _to_dynamo(value: Any) -> Any:
     return value
 
 
-class DynamoS3Storage:
+class DynamoS3Storage(StorageBackend):
     """
     Storage layer using DynamoDB for experiment metadata and S3 for full results.
 
