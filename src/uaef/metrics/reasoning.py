@@ -8,15 +8,13 @@ chain-of-thought coherence, logical consistency, reasoning step correctness,
 and fallacy detection.
 """
 
-import json
 from typing import List, Optional, Tuple
 
-import boto3
 
 from uaef.config import get_config
+from uaef.llm_judge import get_judge_client
 from uaef.metrics.base import BaseMetric
 from uaef.metrics.utils import (
-    build_claude_judge_body,
     build_judge_system_prompt,
     extract_json_from_llm_response,
     validate_judge_response,
@@ -164,19 +162,6 @@ class ChainOfThoughtCoherenceMetric(BaseMetric):
         Returns:
             Tuple of (score, reasoning)
         """
-        # Initialize AWS Bedrock client
-        try:
-            config = get_config()
-            bedrock_client = boto3.client(
-                "bedrock-runtime",
-                region_name=config.aws.region,
-                aws_access_key_id=config.aws.access_key_id,
-                aws_secret_access_key=config.aws.secret_access_key,
-                aws_session_token=config.aws.session_token
-            )
-        except Exception as e:
-            raise ConnectionError(f"Failed to initialize Bedrock client: {str(e)}")
-        
         # Prepare prompt
         resp_fmt = """{
                        "score":float,
@@ -211,29 +196,20 @@ class ChainOfThoughtCoherenceMetric(BaseMetric):
         system_prompt = build_judge_system_prompt(system_rubric.format(resp_fmt=resp_fmt))
         user_message = wrap_untrusted(reasoning_text, "candidate_reasoning")
 
-        # Claude 3+ rejects requests with both temperature and top_p;
-        # temperature alone is sufficient for deterministic judge scoring.
-        body = build_claude_judge_body(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
         
-        # Make API call
+        # Invoke the judge backend (request body is built by the backend
+        # layer; system/user trust split already applied above)
         try:
-            response_obj = bedrock_client.invoke_model(
-                modelId=judge_id,
-                body=body,
-                accept='application/json',
-                contentType='application/json'
+            raw_text, _metadata = get_judge_client().invoke(
+                system=system_prompt,
+                prompt=user_message,
+                max_tokens=max_tokens,
+                temperature=temperature,
             )
         except Exception as e:
-            raise RuntimeError(f"Bedrock API call failed: {str(e)}")
+            raise RuntimeError(f"LLM judge API call failed: {str(e)}")
         
         # Parse response
-        response_body = json.loads(response_obj.get('body').read())
-        raw_text = response_body.get('content')[0]['text']
         response_json = extract_json_from_llm_response(raw_text)
         # Security review M-05: validate shape/types before use, not just
         # the score's numeric range.
@@ -331,19 +307,6 @@ class LogicalConsistencyMetric(BaseMetric):
         Returns:
             Tuple of (score, reasoning)
         """
-        # Initialize AWS Bedrock client
-        try:
-            config = get_config()
-            bedrock_client = boto3.client(
-                "bedrock-runtime",
-                region_name=config.aws.region,
-                aws_access_key_id=config.aws.access_key_id,
-                aws_secret_access_key=config.aws.secret_access_key,
-                aws_session_token=config.aws.session_token
-            )
-        except Exception as e:
-            raise ConnectionError(f"Failed to initialize Bedrock client: {str(e)}")
-        
         # Prepare prompt
         resp_fmt = """{
                        "score":float,
@@ -377,29 +340,20 @@ class LogicalConsistencyMetric(BaseMetric):
         system_prompt = build_judge_system_prompt(system_rubric.format(resp_fmt=resp_fmt))
         user_message = wrap_untrusted(reasoning_text, "candidate_reasoning")
 
-        # Claude 3+ rejects requests with both temperature and top_p;
-        # temperature alone is sufficient for deterministic judge scoring.
-        body = build_claude_judge_body(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
         
-        # Make API call
+        # Invoke the judge backend (request body is built by the backend
+        # layer; system/user trust split already applied above)
         try:
-            response_obj = bedrock_client.invoke_model(
-                modelId=judge_id,
-                body=body,
-                accept='application/json',
-                contentType='application/json'
+            raw_text, _metadata = get_judge_client().invoke(
+                system=system_prompt,
+                prompt=user_message,
+                max_tokens=max_tokens,
+                temperature=temperature,
             )
         except Exception as e:
-            raise RuntimeError(f"Bedrock API call failed: {str(e)}")
+            raise RuntimeError(f"LLM judge API call failed: {str(e)}")
         
         # Parse response
-        response_body = json.loads(response_obj.get('body').read())
-        raw_text = response_body.get('content')[0]['text']
         response_json = extract_json_from_llm_response(raw_text)
         # Security review M-05: validate shape/types before use, not just
         # the score's numeric range.
@@ -503,19 +457,6 @@ class ReasoningStepCorrectnessMetric(BaseMetric):
         Returns:
             Tuple of (score, reasoning)
         """
-        # Initialize AWS Bedrock client
-        try:
-            config = get_config()
-            bedrock_client = boto3.client(
-                "bedrock-runtime",
-                region_name=config.aws.region,
-                aws_access_key_id=config.aws.access_key_id,
-                aws_secret_access_key=config.aws.secret_access_key,
-                aws_session_token=config.aws.session_token
-            )
-        except Exception as e:
-            raise ConnectionError(f"Failed to initialize Bedrock client: {str(e)}")
-        
         # Prepare prompt
         resp_fmt = """{
                        "score":float,
@@ -558,29 +499,20 @@ class ReasoningStepCorrectnessMetric(BaseMetric):
         context_section = f"[Context]\n{context}\n\n" if context else ""
         user_message = context_section + wrap_untrusted(reasoning_text, "candidate_reasoning")
 
-        # Claude 3+ rejects requests with both temperature and top_p;
-        # temperature alone is sufficient for deterministic judge scoring.
-        body = build_claude_judge_body(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
         
-        # Make API call
+        # Invoke the judge backend (request body is built by the backend
+        # layer; system/user trust split already applied above)
         try:
-            response_obj = bedrock_client.invoke_model(
-                modelId=judge_id,
-                body=body,
-                accept='application/json',
-                contentType='application/json'
+            raw_text, _metadata = get_judge_client().invoke(
+                system=system_prompt,
+                prompt=user_message,
+                max_tokens=max_tokens,
+                temperature=temperature,
             )
         except Exception as e:
-            raise RuntimeError(f"Bedrock API call failed: {str(e)}")
+            raise RuntimeError(f"LLM judge API call failed: {str(e)}")
         
         # Parse response
-        response_body = json.loads(response_obj.get('body').read())
-        raw_text = response_body.get('content')[0]['text']
         response_json = extract_json_from_llm_response(raw_text)
         # Security review M-05: validate shape/types before use, not just
         # the score's numeric range.
@@ -678,19 +610,6 @@ class FallacyDetectionMetric(BaseMetric):
         Returns:
             Tuple of (score, reasoning) where 1.0 = no fallacies, 0.0 = many fallacies
         """
-        # Initialize AWS Bedrock client
-        try:
-            config = get_config()
-            bedrock_client = boto3.client(
-                "bedrock-runtime",
-                region_name=config.aws.region,
-                aws_access_key_id=config.aws.access_key_id,
-                aws_secret_access_key=config.aws.secret_access_key,
-                aws_session_token=config.aws.session_token
-            )
-        except Exception as e:
-            raise ConnectionError(f"Failed to initialize Bedrock client: {str(e)}")
-        
         # Prepare prompt
         resp_fmt = """{
                        "score":float,
@@ -727,29 +646,20 @@ class FallacyDetectionMetric(BaseMetric):
         system_prompt = build_judge_system_prompt(system_rubric.format(resp_fmt=resp_fmt))
         user_message = wrap_untrusted(reasoning_text, "candidate_reasoning")
 
-        # Claude 3+ rejects requests with both temperature and top_p;
-        # temperature alone is sufficient for deterministic judge scoring.
-        body = build_claude_judge_body(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
         
-        # Make API call
+        # Invoke the judge backend (request body is built by the backend
+        # layer; system/user trust split already applied above)
         try:
-            response_obj = bedrock_client.invoke_model(
-                modelId=judge_id,
-                body=body,
-                accept='application/json',
-                contentType='application/json'
+            raw_text, _metadata = get_judge_client().invoke(
+                system=system_prompt,
+                prompt=user_message,
+                max_tokens=max_tokens,
+                temperature=temperature,
             )
         except Exception as e:
-            raise RuntimeError(f"Bedrock API call failed: {str(e)}")
+            raise RuntimeError(f"LLM judge API call failed: {str(e)}")
         
         # Parse response
-        response_body = json.loads(response_obj.get('body').read())
-        raw_text = response_body.get('content')[0]['text']
         response_json = extract_json_from_llm_response(raw_text)
         # Security review M-05: validate shape/types before use, not just
         # the score's numeric range.

@@ -19,10 +19,10 @@ import asyncio
 import json
 from typing import Any, Optional
 
-import boto3
 from botocore.exceptions import ClientError
 
 from uaef.config import get_config
+from uaef.llm_judge import get_judge_client
 from uaef.logging import get_logger
 from uaef.metrics.base import BaseMetric
 from uaef.metrics.utils import (
@@ -79,8 +79,10 @@ def _invoke_bedrock_judge(system_prompt: str, user_message: str, metric_name: st
     Invoke the configured Bedrock judge with a system/user prompt split and
     return parsed JSON.
 
-    Centralizes the boto3 client init, request formatting, invocation, and
-    JSON extraction shared by every multi-turn LLM-judge metric in this module.
+    Centralizes judge client resolution, invocation, and JSON extraction
+    shared by every multi-turn LLM-judge metric in this module. Request
+    formatting (the Claude Messages body, including the system/user trust
+    split) is owned by the judge backend layer and metrics.utils.
 
     Security review H-01: takes a system_prompt (rubric, built via
     build_judge_system_prompt) and a user_message (the untrusted conversation
@@ -93,7 +95,7 @@ def _invoke_bedrock_judge(system_prompt: str, user_message: str, metric_name: st
 
     Args:
         system_prompt: The rubric/instructions (already passed through
-            build_judge_system_prompt). Goes in Bedrock's `system` field.
+            build_judge_system_prompt). Goes in the judge's `system` field.
         user_message: The untrusted content, already wrapped (via
             wrap_untrusted) plus any trusted plain-text context — goes in
             the single `user` turn.
@@ -103,41 +105,21 @@ def _invoke_bedrock_judge(system_prompt: str, user_message: str, metric_name: st
         Parsed JSON dict returned by the judge.
 
     Raises:
-        ConnectionError: Bedrock client could not be initialized.
-        RuntimeError:    Bedrock invoke_model call failed.
+        RuntimeError: Judge client invoke call failed.
         ValueError:      Judge response was not parseable as JSON.
     """
-    try:
-        config = get_config()
-        bedrock_client = boto3.client(
-            "bedrock-runtime",
-            region_name=config.aws.region,
-            aws_access_key_id=config.aws.access_key_id,
-            aws_secret_access_key=config.aws.secret_access_key,
-            aws_session_token=config.aws.session_token,
-        )
-    except Exception as e:
-        raise ConnectionError(f"Failed to initialize Bedrock client: {str(e)}")
-
-    body = build_claude_judge_body(
-        system_prompt=system_prompt,
-        user_message=user_message,
-        max_tokens=config.llm_judge.max_tokens,
-        temperature=config.llm_judge.temperature,
-    )
+    config = get_config()
 
     try:
-        response_obj = bedrock_client.invoke_model(
-            modelId=config.llm_judge.model_id,
-            body=body,
-            accept="application/json",
-            contentType="application/json",
+        raw_text, _metadata = get_judge_client().invoke(
+            system=system_prompt,
+            prompt=user_message,
+            max_tokens=config.llm_judge.max_tokens,
+            temperature=config.llm_judge.temperature,
         )
     except Exception as e:
-        raise RuntimeError(f"Bedrock API call failed: {str(e)}")
+        raise RuntimeError(f"LLM judge API call failed: {str(e)}")
 
-    response_body = json.loads(response_obj.get("body").read())
-    raw_text = response_body.get("content")[0]["text"]
     try:
         return extract_json_from_llm_response(raw_text)
     except (json.JSONDecodeError, ValueError) as e:
